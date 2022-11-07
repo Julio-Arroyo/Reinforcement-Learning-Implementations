@@ -18,10 +18,12 @@ BATCH_SIZE = 32
 EPSILON_INITIAL = 1
 EPSILON_FINAL = 0.1
 EPSILON_DECAY_DURATION = 10000
+GAMMA = 1.0
+OBSERVATION_SPACE_SIZE = 8
 
 
 Transition = namedtuple('Transition',
-                       ('state', 'action', 'reward', 'next_state'))
+                       ('state', 'action', 'reward', 'next_state', 'terminal'))
 
 
 class DQN(nn.Module):
@@ -48,9 +50,10 @@ class DQN(nn.Module):
 class DQN_dummy(nn.Module):
     def __init__(self):
         super().__init__()
-        self.linear1 = nn.Linear(2, 100)
+        self.linear1 = nn.Linear(OBSERVATION_SPACE_SIZE, 100)
         self.linear2 = nn.Linear(100, 100)
-        self.output_layer = nn.Linear(100, NUM_ACTIONS)
+        self.output_layer = nn.Linear(100, 1)
+        # TODO: don't i need a softmax layer?
     
     def forward(self, x):
         out1 = F.relu(self.linear1(x))
@@ -66,9 +69,27 @@ def get_epsilon(iter_num):
         return ((EPSILON_FINAL - EPSILON_INITIAL)/EPSILON_DECAY_DURATION)*iter_num + EPSILON_INITIAL
 
 
+def preprocess(state):
+    # TODO: implement frame-skipping and down sampling image
+    return state
+
+
+def get_targets(replay_memory, dqn):
+    sample = replay_memory.sample()
+    targets = torch.zeros((BATCH_SIZE,))
+    inputs = torch.zeros((BATCH_SIZE, OBSERVATION_SPACE_SIZE))
+    assert len(sample) == BATCH_SIZE
+    for j in range(BATCH_SIZE):
+
+        targets[j] = sample.reward
+        if not sample.terminal:
+            targets[j] +=  dqn(sample.next_state)
+
+
 def train(num_episodes):
     replay_memory = ReplayMemory(CAPACITY)
     dqn = DQN_dummy()
+    criterion = torch.nn.MSELoss()
     # print(gym.envs.registry.all())
     env = gym.make('LunarLander-v2')
     for ep in num_episodes:
@@ -76,17 +97,21 @@ def train(num_episodes):
         done = False
         i = 0
         while not done:
-            epsilon = get_epsilon(i)
-            if random.random() <= epsilon:
+            state = preprocess(state)
+            if random.random() <= get_epsilon(i):
                 action = random.randint(0, 3)
             else:
-                action = torch.argmax(DQN_dummy(state))
+                action = torch.argmax(dqn(state))
             
             next_state, reward, done, info = env.step(action)
+            next_state = preprocess(next_state)
             replay_memory.push(Transition(state, action, reward, next_state))
 
             if len(replay_memory.memory) >= BATCH_SIZE:
-                # TODO: SAMPLE AND OPTIMIZE
+                sample = replay_memory.sample()
+                target = reward
+                if not done:
+                    reward += GAMMA*torch.max(dqn(next_state))
             i += 1
 
 
