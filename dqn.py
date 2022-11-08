@@ -4,22 +4,27 @@ import torch.nn.functional as F
 import torch
 import gym
 import random
-from collections import namedtuple
+from collections import namedtuple, deque
+import numpy as np
+import time
+import matplotlib.pyplot as plt
+from IPython import display
 
 
-CAPACITY = 10000
+CAPACITY = 1000000
 NUM_INPUT_CHANNELS = 4
 KERNEL1 = 8
 STRIDE1 = 4
 KERNEL2 = 4
 STRIDE2 = 2
-NUM_ACTIONS = 2
+NUM_ACTIONS = 4
 BATCH_SIZE = 32
 EPSILON_INITIAL = 1
-EPSILON_FINAL = 0.1
-EPSILON_DECAY_DURATION = 10000
-GAMMA = 1.0
+EPSILON_FINAL = 0.01
+EPSILON_DECAY_DURATION = 5000
+GAMMA = 0.99
 OBSERVATION_SPACE_SIZE = 8
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 
 Transition = namedtuple('Transition',
@@ -50,9 +55,9 @@ class DQN(nn.Module):
 class DQN_dummy(nn.Module):
     def __init__(self):
         super().__init__()
-        self.linear1 = nn.Linear(OBSERVATION_SPACE_SIZE, 100)
-        self.linear2 = nn.Linear(100, 100)
-        self.output_layer = nn.Linear(100, 1)
+        self.linear1 = nn.Linear(OBSERVATION_SPACE_SIZE, 150)
+        self.linear2 = nn.Linear(150, 120)
+        self.output_layer = nn.Linear(120, NUM_ACTIONS)
         # TODO: don't i need a softmax layer?
     
     def forward(self, x):
@@ -71,49 +76,101 @@ def get_epsilon(iter_num):
 
 def preprocess(state):
     # TODO: implement frame-skipping and down sampling image
-    return state
+    return torch.tensor(state, device=DEVICE)
 
 
-def get_targets(replay_memory, dqn):
-    sample = replay_memory.sample()
-    targets = torch.zeros((BATCH_SIZE,))
-    inputs = torch.zeros((BATCH_SIZE, OBSERVATION_SPACE_SIZE))
+def get_bellman_preds_targets(replay_memory, dqn, optimal_dqn):
+    sample = replay_memory.sample(BATCH_SIZE)
+    targets = torch.zeros((BATCH_SIZE,), device=DEVICE)  # BATCH_SIZE-dimensional column vector
+    preds = torch.zeros((BATCH_SIZE,), device=DEVICE)
     assert len(sample) == BATCH_SIZE
-    for j in range(BATCH_SIZE):
 
-        targets[j] = sample.reward
-        if not sample.terminal:
-            targets[j] +=  dqn(sample.next_state)
+    for j in range(BATCH_SIZE):
+        preds[j] = dqn(sample[j].state)[sample[j].action]
+
+        targets[j] = sample[j].reward
+        if not sample[j].terminal:
+            targets[j] += GAMMA*torch.max(optimal_dqn(sample[j].next_state))
+
+    return (preds, targets)
+
+def display_env(env, step=0, info=""):
+    plt.figure(3)
+    plt.clf()
+    plt.imshow(env.render(mode='rgb_array'))
+    plt.title("%s | Step: %d %s" % (env._spec.id,step, info))
+    plt.axis('off')
+
+    display.clear_output(wait=True)
+    display.display(plt.gcf())
 
 
 def train(num_episodes):
     replay_memory = ReplayMemory(CAPACITY)
     dqn = DQN_dummy()
+    optimal_dqn = DQN_dummy()
+    optimal_dqn.load_state_dict(dqn.state_dict())
+    dqn.to(DEVICE)
+    optimal_dqn.to(DEVICE)
+    optimal_dqn.eval()
+
     criterion = torch.nn.MSELoss()
-    # print(gym.envs.registry.all())
+    optimizer = torch.optim.Adam(dqn.parameters())
     env = gym.make('LunarLander-v2')
-    for ep in num_episodes:
+    ep_reward_history = deque(maxlen=100)
+    avg_reward_values = []
+    # print(gym.envs.registry.all())
+
+    total_iterations = 0
+    for ep in range(num_episodes):
         state = env.reset()
         done = False
-        i = 0
+        ep_len = 0
+        ep_reward = 0
         while not done:
             state = preprocess(state)
-            if random.random() <= get_epsilon(i):
-                action = random.randint(0, 3)
+            if random.random() <= get_epsilon(total_iterations):
+                action = random.randint(0, NUM_ACTIONS-1)
             else:
-                action = torch.argmax(dqn(state))
+                action = torch.argmax(dqn(state)).item()
             
-            next_state, reward, done, info = env.step(action)
+            # if ep % 10 == 0:
+            #     display_env(env)
+            next_state, reward, done, _ = env.step(action)
             next_state = preprocess(next_state)
-            replay_memory.push(Transition(state, action, reward, next_state))
+            replay_memory.push(Transition(state, action, reward, next_state, done))
+            ep_reward += reward
 
-            if len(replay_memory.memory) >= BATCH_SIZE:
-                sample = replay_memory.sample()
-                target = reward
-                if not done:
-                    reward += GAMMA*torch.max(dqn(next_state))
-            i += 1
+            if len(replay_memory.memory) < BATCH_SIZE:
+                ep_len += 1
+                total_iterations += 1
+                continue
 
+            preds, targets = get_bellman_preds_targets(replay_memory, dqn, optimal_dqn)
+
+            loss = criterion(preds, targets)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            ep_len += 1
+            total_iterations += 1
+
+        ep_reward_history.append(ep_reward)
+
+        # LOG EPISODE STATISTICS
+        if ep % 10 == 0:
+            print(f"EPISODE # {ep}")
+            print("\t-Episode length: ", ep_len)
+            print("\t-Total iterations", total_iterations)
+            print("\t-Current epsilon: ", get_epsilon(total_iterations))
+            avg_reward = sum(ep_reward_history)/len(ep_reward_history)
+            print("\t-Avg Reward: ", avg_reward)
+            avg_reward_values.append(avg_reward)
+            optimal_dqn.load_state_dict(dqn.state_dict())
+
+    env.close()
+    np.save("avg_reward.npy", np.array(avg_reward_values))
 
 if __name__ == "__main__":
-    train(1)
+    train(500)
