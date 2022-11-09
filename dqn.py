@@ -7,8 +7,6 @@ import random
 from collections import namedtuple, deque
 import numpy as np
 import time
-import matplotlib.pyplot as plt
-from IPython import display
 
 # TODO LIST
     # TODO: visualize what the shit this agent is doing
@@ -96,16 +94,6 @@ def get_bellman_preds_targets(replay_memory, dqn, optimal_dqn):
             targets[j] += GAMMA*torch.max(optimal_dqn(sample[j].next_state))
 
     return (preds, targets)
-
-def display_env(env, step=0, info=""):
-    plt.figure(3)
-    plt.clf()
-    plt.imshow(env.render(mode='rgb_array'))
-    plt.title("%s | Step: %d %s" % (env._spec.id,step, info))
-    plt.axis('off')
-
-    display.clear_output(wait=True)
-    display.display(plt.gcf())
 
 
 def train(num_episodes):
