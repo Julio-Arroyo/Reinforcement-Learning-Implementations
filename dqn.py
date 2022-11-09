@@ -10,8 +10,11 @@ import time
 import matplotlib.pyplot as plt
 from IPython import display
 
-
-CAPACITY = 1000000
+# TODO LIST
+    # TODO: visualize what the shit this agent is doing
+    # TODO: plot q value as a function of iteration on a number on heldout transitions
+    # TODO: experiment with having longer epsilon decay duration
+CAPACITY = 1000000  # TODO: would the network benefit from a small replay memory so that it forgets transitions from when it was bad?
 NUM_INPUT_CHANNELS = 4
 KERNEL1 = 8
 STRIDE1 = 4
@@ -19,7 +22,7 @@ KERNEL2 = 4
 STRIDE2 = 2
 NUM_ACTIONS = 4
 BATCH_SIZE = 32
-EPSILON_INITIAL = 1
+EPSILON_INITIAL = 1  # TODO: is epsilon-greedy benefitial in a deterministic environment
 EPSILON_FINAL = 0.01
 EPSILON_DECAY_DURATION = 5000
 GAMMA = 0.99
@@ -134,8 +137,10 @@ def train(num_episodes):
             else:
                 action = torch.argmax(dqn(state)).item()
             
-            # if ep % 10 == 0:
-            #     display_env(env)
+            if ep % 10 == 0:
+                env.render()
+                time.sleep(0.01)
+
             next_state, reward, done, _ = env.step(action)
             next_state = preprocess(next_state)
             replay_memory.push(Transition(state, action, reward, next_state, done))
@@ -163,6 +168,7 @@ def train(num_episodes):
             print(f"EPISODE # {ep}")
             print("\t-Episode length: ", ep_len)
             print("\t-Total iterations", total_iterations)
+            print("\t-Replay memory size: ", len(replay_memory))
             print("\t-Current epsilon: ", get_epsilon(total_iterations))
             avg_reward = sum(ep_reward_history)/len(ep_reward_history)
             print("\t-Avg Reward: ", avg_reward)
